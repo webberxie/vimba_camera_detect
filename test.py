@@ -2,102 +2,80 @@
 @Author: 谢雨含
 @First edit: 2021.9.20
 @Last edit: 2021.10.14
-@Use: 智能光电感知实验课示例代码demo，实现相机实时展示检测框，以及目标距离
+@Use: 智能光电感知实验课示例代码,包括距离测算函数，靶标检测函数
 '''
-from vimba import *
+
 import cv2
-import numpy as np
-
-# 检测靶标函数
-def detect_circle_demo(image):
-
-    dst = cv2.GaussianBlur(image,(13,15),15)  # 使用高斯模糊，修改卷积核ksize也可以检测出来
-    gray = dst
-    # gray = cv2.cvtColor(dst,cv2.COLOR_BGR2GRAY)  # 转为灰度图
-
-    circles = cv2.HoughCircles(gray,cv2.HOUGH_GRADIENT,1,30,param1=20,param2=60,minRadius=0,maxRadius=0)
-    # print(circles)
-    if circles is None:
-        return None,None,None
-
-    # 找最大的圆形（此部分代码应当改为找黑色占比最大的圆形才对，可优化）
-    circles = np.uint16(np.around(circles)) #around对数据四舍五入，为整数
-    max_radis,max_circle=0,None
-    for i in circles[0,:]:
-        if i[2]>max_radis:
-            max_radis=i[2]
-            max_circle=i
-    center_x,center_y,radis=max_circle[0],max_circle[1],max_circle[2]
-
-    return center_x,center_y,radis
+import math
 
 # 距离计算函数
 def distance_to_camera(W, F, P):
 
     # compute and return the distance from the maker to the camera
 
+    '''
+
+    :param W: 靶标短边的实际距离(0.161m)
+    :param F: 焦距
+    :param P: 靶标短边的像素宽度(pixel)
+    :return: 距离(m)
+    '''
+
     # 仅保留三位小数
     return round( (W * F) / P,3)
 
-# 检测框实时可视化demo，由于计算的延迟，故展示效果会比较卡顿；算法还可优化，以减少计算延迟
-def demo():
-    with Vimba.get_instance() as vimba:
-        cams = vimba.get_all_cameras()
-        with cams[0] as cam:
-            exposure_time = cam.ExposureTime
-            time = exposure_time.get()
-            # 改变曝光时间
-            # inc = exposure_time.get_increment()
-            # exposure_time.set(time + inc * 10)
-            print('exposure_time:',time)
-            # 曝光时间
+# 检测靶标函数
+def detect(img):
+    '''
 
-            Frame_Rate=cam.get_feature_by_name("AcquisitionFrameRateEnable")
-            Frame_Rate.set(True)
-            Frame_Rate=cam.get_feature_by_name("AcquisitionFrameRate")
-            Frame_Rate.set(1.2)
-            print('FrameRate:', Frame_Rate)
-            # 帧率
+    :param img: 输入图像
+    :return: img(叠加靶标检测结果的图像)，ret(bool,是否检测到靶标)，w(检测靶标的的短边欧式距离，单位：pixel)
+    '''
+    # 检测角点
+    # 靶标整体7*10,ret为bool变量，corners为角点矩阵(6*9=54个角点，包括x,y坐标)
+    ret, corners = cv2.findChessboardCorners(img, (6, 9), None)
+    # print(ret,corners.shape) # True , (54,1,2)
+    if not ret:
+        print('没有检测到靶标')
+        w = -1
+    else:
+        point1 = corners[0, 0, :]
+        point2 = corners[5, 0, :]
+        point3 = corners[-1, 0, :]
+        point4 = corners[-6, 0, :]
 
-            gain = cam.get_feature_by_name("Gain")
-            gain.set(1)
-            print('Gain:', gain)
-            # 增益
+        delta_1 = (point2 - point1) / 5
+        delta_2 = (point4 - point1) / 8
 
-            # Aquire single frame synchronously
-            # frame = cam.get_frame()
-            # Aquire 10 frames synchronously
-            for frame in cam.get_frame_generator(limit=100):
-                frame_temp = frame.as_opencv_image()
+        real_point1 = (point1 - delta_1 - delta_2).astype(int)
+        real_point2 = (point2 + delta_1 - delta_2).astype(int)
+        real_point3 = (point3 + delta_1 + delta_2).astype(int)
+        real_point4 = (point4 - delta_1 + delta_2).astype(int)
 
-                # resize_frame = cv2.resize(frame_temp,(300,400))
-                center_x, center_y, radis = detect_circle_demo(frame_temp)
-                if not center_x:
-                    print('没有检测到圆形')
-                else:
-                    print('圆心在照片中的位置(像素)：', center_x, center_y, '半径长度（m）:', radis)
+        # 将四个真实边缘点绘制出来，矩形绘制
+        cv2.circle(img, (real_point1[0], real_point1[1]), 10, (255, 0, 0), 2)
+        cv2.circle(img, (real_point2[0], real_point2[1]), 10, (255, 0, 0), 2)
+        cv2.circle(img, (real_point3[0], real_point3[1]), 10, (255, 0, 0), 2)
+        cv2.circle(img, (real_point4[0], real_point4[1]), 10, (255, 0, 0), 2)
+        # cv2.rectangle(img, (real_point1[0],real_point1[1]) , (real_point3[0],real_point3[1]), (0,255,0), 2)
+        # 绘制矩形(四点两两连线)
+        point_color = (255, 255, 0)  # BGR
+        thickness = 5
+        lineType = 4
+        # 注：此处如果报错，要求为int，将所有点转为int类型；部分版本支持float类型输入
+        cv2.line(img, (real_point1[0], real_point1[1]), (real_point2[0], real_point2[1]), point_color, thickness,
+                 lineType)
+        cv2.line(img, (real_point2[0], real_point2[1]), (real_point3[0], real_point3[1]), point_color, thickness,
+                 lineType)
+        cv2.line(img, (real_point3[0], real_point3[1]), (real_point4[0], real_point4[1]), point_color, thickness,
+                 lineType)
+        cv2.line(img, (real_point4[0], real_point4[1]), (real_point1[0], real_point1[1]), point_color, thickness,
+                 lineType)
 
-                    # 初始焦距测算实验
-                    # F = (P * D) / W
-                    # 初始测试中，相机拍摄靶标距离0.38m，靶标直径0.1m,在拍摄照片中直径占据像素长度为1028像素;
-                    # 后续微调焦距，可视为微小误差；故我们视焦距为一定值
-                    focallength = (1028 * 0.38) / 0.1
-                    # 当前测试，计算距离
-                    W = 0.1
-                    dis = distance_to_camera(W, focallength, radis)
+        dis = real_point1 - real_point2
+        w = math.sqrt(dis[0]*dis[0] + dis[1]*dis[1])
+    return img,ret,w
 
-                # 绘图展示
-                resize_rate = 6
-                img_w, img_h, _ = frame_temp.shape
-                #print('当前图片分辨率：','高度：',img_h,'宽度：',img_w)
-                frame_temp = cv2.resize(frame_temp, (int(img_h / resize_rate), int(img_w / resize_rate)))
-                if center_x!=None:
-                    cv2.circle(frame_temp, (int(center_x / resize_rate), int(center_y / resize_rate)), int(radis / resize_rate),
-                               (0, 0, 255), 2)
-                    cv2.circle(frame_temp, (int(center_x / resize_rate), int(center_y / resize_rate)), 2, (255, 0, 0), 2)  # 圆心
-                    print('当前靶标与摄像头距离(m)：', dis)
-                cv2.imshow("detect_circle_demo", frame_temp)
-                cv2.waitKey(1)
-if __name__ == "__main__":
-    demo()
+
+
 
